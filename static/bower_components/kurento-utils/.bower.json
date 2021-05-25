@@ -1,0 +1,13 @@
+{
+  "name": "kurento-utils",
+  "homepage": "https://github.com/Mobilea/kurento-utils-js",
+  "_release": "cb3848cbae",
+  "_resolution": {
+    "type": "branch",
+    "branch": "master",
+    "commit": "cb3848cbaee241cd05cd9126a90498d80c6a4bf8"
+  },
+  "_source": "https://github.com/Mobilea/kurento-utils-js.git",
+  "_target": "master",
+  "_originalSource": "https://github.com/Mobilea/kurento-utils-js.git"
+}

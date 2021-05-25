@@ -1,0 +1,177 @@
+<head>
+   <meta charset="utf-8">
+   <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    <title>V-Chat</title>
+	<link rel="stylesheet" href="../css/login_register.css">
+   <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
+   <script src="../js/auth.js"></script>
+
+
+
+<script type="text/javascript">
+   $(document).ready( () => {
+
+      $( "#form1" ).submit( (event) => {
+         event.preventDefault();
+
+         $.ajax({
+            type: 'POST',
+            url: 'register',
+            data: $('#form1').serialize(),
+            dataType: "json",
+            success: (response) => {
+               //alert("a");
+               //console.log(response.Success);
+               $('#form1')[0].reset();
+
+               document.getElementById("check").innerHTML=response.Success;
+                     //ADD THIS CODE
+                     setTimeout( () => {
+                        document.getElementById("check").innerHTML="";
+                     },3000);
+                     if (response.Success=="You are regestered,You can login now.") {
+                        document.getElementById("switch").click();
+                     };
+                  },
+                  error: () => {
+                  }
+               })
+      });
+   });
+</script>
+
+
+<script type="text/javascript">
+   $(document).ready( () => {
+
+      $( "#form" ).submit( (event) => {
+         event.preventDefault();
+
+         $.ajax({
+            type: 'POST',
+            url: 'login',
+            data: $('#form').serialize(),
+            dataType: "json",
+            success: (response) => {
+               //alert("a");
+               //console.log(response.Success);
+               $('#form')[0].reset();
+
+               document.getElementById("check").innerHTML=response.Success;
+                     //ADD THIS CODE
+                     setTimeout( () => {
+                        document.getElementById("check").innerHTML="";
+                     },3000);
+                     if (response.Success=="Success!") {
+                        document.getElementById("aa").click();
+                     };
+                  },
+                  error: () => {
+                  }
+               })
+      });
+
+   });
+</script>
+
+</head>
+
+<body>
+
+    <section id="formHolder">
+ 
+       <div class="row">
+ 
+          <!-- Brand Box -->
+          <div class="col-sm-6 brand">
+             <a href="#" class="logo">V-chat <span>.</span></a>
+ 
+             <div class="heading">
+                <h2>V-Chat</h2>
+                <p>Video conferencing web app for meetings & trainings</p>
+             </div>
+          </div>
+ 
+ 
+          <!-- Form Box -->
+          <div class="col-sm-6 form">
+ 
+             <!-- Login Form -->
+             <div class="login form-peice switched">
+                <form class="login-form" id="form" method="post" >
+                   <div class="form-group">
+                      <label for="loginemail">Email Address</label>
+                      <input type="email" name="email" id="loginemail" required>
+                   </div>
+ 
+                   <div class="form-group">
+                      <label for="loginPassword">Password</label>
+                      <input type="password" name="password" id="loginPassword" required>
+                   </div>
+ 
+                   <div class="CTA">
+                      <input type="submit" value="Login">
+                      <a href="#" class="switch">I'm New</a>
+                      <div style="padding: 17px;" ><span>Did you forgot password? </span><a href="/forgetpass">click here</a>
+                      </div>
+                      <div>
+                        <span id="check" ></span>
+                     </div>
+                     <div id="LangTable"><a href="/profile" id="aa"></a>
+                     </div>
+                     
+                   </div>
+                   
+                </form>
+             </div><!-- End Login Form -->
+ 
+ 
+             <!-- Signup Form -->
+             <div class="signup form-peice">
+                <form class="signup-form" id="form1" method="post">
+ 
+                  <div class="form-group">
+                     <label for="email">Email Address</label>
+                     <input type="email" name="email"  required="" class="email"><br/>
+                     <span class="error"></span>
+                  </div>
+
+                   <div class="form-group">
+                      <label for="name">Username</label>
+                     <input type="text" name="username"  required="" class="name"><br/>      
+                      <span class="error"></span>
+                   </div>
+ 
+                   <div class="form-group">
+                      <label for="password">Password</label>
+                      <input type="password" name="password"  required="" class="pass">
+                      <span class="error"></span>
+                   </div>
+ 
+                   <div class="form-group">
+                      <label for="passwordCon">Confirm Password</label>
+                      <input type="password" name="passwordConf"  required="" class="passConfirm">
+                      <span class="error"></span>
+                   </div>
+ 
+                   <div class="CTA">
+                     <input type="submit" value="Register">
+                     <a href="#" id="switch"class="switch">I have an account</a>
+                     <br><br>
+                     <div>
+                        <span id="check"></span>
+                     </div>
+                   </div>
+               </form>
+             
+             
+             </div><!-- End Signup Form -->
+          </div>
+       </div>
+ 
+    </section>
+ 
+
+ 
+
+</body>

@@ -1,0 +1,1090 @@
+
+var socket = io.connect();
+var localVideoCurrentId;
+var localVideo;
+var sessionId;
+var videoCount=0;
+var participants = {};
+var video;
+
+window.onbeforeunload = function () {
+    socket.disconnect();
+};
+
+socket.on("id", function (id) {
+    console.log("receive id : " + id);
+    sessionId = id;
+});
+
+// message handler
+socket.on("message", function (message) {
+    switch (message.id) {
+        case "registered":
+            disableElements("register");
+            console.log(message.data);
+            break;
+        case "incomingCall":
+            incomingCall(message);
+            break;
+        case "callResponse":
+            console.log(message);
+            console.log(message.message);
+            break;
+        case "existingParticipants":
+            console.log("existingParticipants : " + message.data);
+            onExistingParticipants(message);
+            break;
+        case "newParticipantArrived":
+            console.log("newParticipantArrived : " + message.new_user_id);
+            onNewParticipant(message);
+            break;
+        case "participantLeft":
+            console.log("participantLeft : " + message.sessionId);
+            onParticipantLeft(message);
+            break;
+        case "receiveVideoAnswer":
+            console.log("receiveVideoAnswer from : " + message.sessionId);
+            onReceiveVideoAnswer(message);
+            break;
+        case "iceCandidate":
+            console.log("iceCandidate from : " + message.sessionId);
+            var participant = participants[message.sessionId];
+            if (participant != null) {
+                console.log(message.candidate);
+                participant.rtcPeer.addIceCandidate(message.candidate, function (error) {
+                    if (error) {
+                        if (message.sessionId === sessionId) {
+                            console.error("Error adding candidate to self : " + error);
+                        } else {
+                            console.error("Error adding candidate : " + error);
+                        }
+                    }
+                });
+            } else {
+                console.error('still does not establish rtc peer for : ' + message.sessionId);
+            }
+            break;
+        default:
+            console.error("Unrecognized message: ", message);
+    }
+});
+
+/**
+ * Send message to server
+ * @param data
+ */
+function sendMessage(data) {
+    socket.emit("message", data);
+}
+
+/**
+ * Register to server
+ */
+function register() {
+    var data = {
+        id: "register",
+        name: document.getElementById('userName').value
+    };
+    sendMessage(data);
+}
+
+/**
+ * Check if roomName exists, use DOM roomName otherwise, then join room
+ * @param roomName
+ */
+function joinRoom(roomName) {
+    disableElements('joinRoom');
+
+    // Check if roomName was given or if it's joining via roomName input field
+    if(typeof roomName == 'undefined'){
+        roomName = document.getElementById('roomName').value;
+    }
+    document.getElementById('roomName').value = roomName;
+
+    var data = {
+        id: "joinRoom",
+        roomName: roomName
+    };
+    sendMessage(data);
+}
+
+/**
+ * Invite other user to a conference call
+ */
+function call() {
+    // Not currently in a room
+    disableElements("call");
+    var message = {
+        id : 'call',
+        from : document.getElementById('userName').value,
+        to : document.getElementById('otherUserName').value
+    };
+    sendMessage(message);
+}
+
+/**
+ * Tell room you're leaving and remove all video elements
+ */
+function leaveRoom(){
+
+    disableElements("leaveRoom");
+    var message = {
+        id: "leaveRoom"
+    };
+
+    participants[sessionId].rtcPeer.dispose();
+    sendMessage(message);
+    participants = {};
+
+    var myNode = document.getElementById("video_list");
+    while (myNode.firstChild) {
+        myNode.removeChild(myNode.firstChild);
+    }
+}
+
+/**
+ * Javascript Confirm to see if user accepts invite
+ * @param message
+ */
+function incomingCall(message) {
+    var joinRoomMessage = message;
+    if (confirm('User ' + message.from
+            + ' is calling you. Do you accept the call?')) {
+        if(Object.keys(participants).length > 0){
+            leaveRoom();
+        }
+        console.log('message');
+        console.log(message);
+        joinRoom(joinRoomMessage.roomName);
+    } else {
+        var response = {
+            id : 'incomingCallResponse',
+            from : message.from,
+            callResponse : 'reject',
+            message : 'user declined'
+        };
+        sendMessage(response);
+    }
+}
+
+/**
+ * Request video from all existing participants
+ * @param message
+ */
+function onExistingParticipants(message) {
+
+    
+
+    var constraints = {
+        audio: true,
+        video: {
+            mandatory: {
+                maxWidth: 160,
+                maxHeight: 160,
+                maxFrameRate: 15,
+                minFrameRate: 15
+            }
+        }
+    };
+    console.log(sessionId + " register in room " + message.roomName);
+
+    // create video for current user to send to server
+    var localParticipant = new Participant(sessionId);
+    participants[sessionId] = localParticipant;
+    localVideo = document.getElementById("local_video");
+    var video = localVideo;
+
+    // bind function so that calling 'this' in that function will receive the current instance
+    var options = {
+        localVideo: video,
+        mediaConstraints: constraints,
+        onicecandidate: localParticipant.onIceCandidate.bind(localParticipant)
+    };
+
+
+    localParticipant.rtcPeer = new kurentoUtils.WebRtcPeer.WebRtcPeerSendonly(options, function (error) {
+        if (error) {
+            return console.error(error);
+        }
+
+        // Set localVideo to new object if on IE/Safari
+        localVideo = document.getElementById("local_video");
+
+        // initial main video to local first
+        localVideoCurrentId = sessionId;
+        localVideo.src = localParticipant.rtcPeer.localVideo.src;
+        localVideo.muted = true;
+
+        // Internet Explorer fix to fix audio :( has to be done after attachMediaStream is finished
+        //participants[sessionId].rtcPeer.getLocalStream().getAudioTracks()[0].enabled = true;
+
+        console.log("local participant id : " + sessionId);
+        this.generateOffer(localParticipant.offerToReceiveVideo.bind(localParticipant));
+    });
+
+    // get access to video from all the participants
+    console.log(message.data);
+    for (var i in message.data) {
+        receiveVideoFrom(message.data[i],message.name[i]);
+    }
+    for (var j in message.name){
+        console.log(message.name[j])
+    }
+}
+
+/**
+ * Add new participant locally and request video from new participant
+ * @param sender
+ */
+function receiveVideoFrom(sender,sender_name) {
+    console.log(sessionId + " receive video from " + sender);
+    var participant = new Participant(sender);
+    participants[sender] = participant;
+    participant.name=sender_name;
+    
+    console.log(participant);
+    var video = createVideoForParticipant(participant);
+
+    // bind function so that calling 'this' in that function will receive the current instance
+    var options = {
+        remoteVideo: video,
+        onicecandidate: participant.onIceCandidate.bind(participant)
+    };
+
+    var videoBtn = document.getElementById('video');
+    var audioBtn = document.getElementById('audio');
+    var Flag = true;
+    var audioFlag = true;
+
+
+    
+     videoBtn.onclick = function(){
+         if (Flag == false){
+            participants[sessionId].rtcPeer.videoEnabled = true;
+            Flag = true;
+         }
+         else{
+            participants[sessionId].rtcPeer.videoEnabled = false;
+            Flag = false;
+         }
+        }
+
+     audioBtn.onclick = function(){
+         if (audioFlag == false){
+            participants[sessionId].rtcPeer.audioEnabled = true;
+            audioFlag = true;
+         }
+         else{
+            participants[sessionId].rtcPeer.audioEnabled = false;
+            audioFlag = false;
+         }
+    }
+
+
+
+
+
+    participant.rtcPeer = new kurentoUtils.WebRtcPeer.WebRtcPeerRecvonly(options, function (error) {
+        if (error) {
+            return console.error(error);
+        }
+        this.generateOffer(participant.offerToReceiveVideo.bind(participant));
+    });
+}
+
+/**
+ * Receive video from new participant
+ * @param message
+ */
+function onNewParticipant(message) {
+    receiveVideoFrom(message.new_user_id,message.name)
+
+    
+    console.log(message.name);
+    
+}
+
+/**
+ * Destroy videostream/DOM element on participant leaving room
+ * @param message
+ */
+function onParticipantLeft(message) {
+    var participant = participants[message.sessionId];
+    participant.dispose();
+    delete participants[message.sessionId];
+
+    console.log("video-" + participant.id);
+    // remove video tag
+    //document.getElementById("video-" + participant.id).remove();
+    var div = document.getElementById("div-"+ participant.id);
+    // Internet Explorer doesn't know element.remove(), does know this
+    
+    div.parentNode.removeChild(div);
+}
+
+/**
+ * Required WebRTC method
+ * @param message
+ */
+function onReceiveVideoAnswer(message) {
+    var participant = participants[message.sessionId];
+    participant.rtcPeer.processAnswer(message.sdpAnswer, function (error) {
+        if (error) {
+            console.error(error);
+        } else {
+            participant.isAnswer = true;
+            while (participant.iceCandidateQueue.length) {
+                console.error("collected : " + participant.id + " ice candidate");
+                var candidate = participant.iceCandidateQueue.shift();
+                participant.rtcPeer.addIceCandidate(candidate);
+            }
+        }
+    });
+}
+
+/**
+ * Create video DOM element
+ * @param participant
+ * @returns {Element}
+ */
+function createVideoForParticipant(participant) {
+
+    var videoId = "video-" + participant.id;
+    
+    div =document.createElement('div');
+    video = document.createElement('video');
+    vname = document.createElement('a');
+    pin = document.createElement('button');
+
+    div.id= "div-"+ participant.id;
+    video.name = participant.name;
+    // video.className = "video"
+    video.autoplay = true;
+    video.id = videoId;
+    div.className="class5"
+    video.poster = "img/user.jpg";
+    // vname.className="name";
+    vname.innerHTML=participant.name;
+    pin.onclick="enlarge(this.id)"
+    div.appendChild(video);
+    div.appendChild(vname);
+    // div.appendChild(pin);
+
+    document.getElementById("video_list").appendChild(div);
+
+
+    
+      
+    
+    // return video element
+    return document.getElementById(videoId);
+}
+
+setInterval(function(){
+    var elements = document.getElementsByClassName('class5');
+    videoCount=elements.length;
+
+    for (var i in elements) {
+        if(videoCount==1){
+            elements[i].style="width:95%; height: 95%; float: left;";
+        }
+        else if(videoCount==2){
+            elements[i].style="width:47%; height: 47%; float: left;";
+        }
+        else if(videoCount>2 && videoCount<5){
+            elements[i].style="width:49%; height: 49%; float: left;";
+        }
+        else{
+            elements[i].style="width:25%; height: 150px; float: left;";
+        }
+        }
+}, 5000);
+
+
+var pinflag =false
+function enlarge(id){
+    var enlarge = document.getElementById(id);
+     enlarge.onclick = function(){
+         if (Flag == false){
+            enlarge.style="width:95%; height: 95%; float: left;";
+            Flag = true;
+         }
+         else{
+            enlarge.style="width:25%; height: 150px; float: left;";
+            Flag = false;
+         }
+        }
+
+}
+function sendMess(user) {
+    var msg = document.getElementById('me').value;
+    if(msg) {
+       //  console.log('msg'+msg);
+       socket.emit('msg', {message: msg, user: user});
+    }
+ }
+
+socket.on('userSet', function(data) {
+   var send = document.getElementById('send');
+   var msg = document.getElementById('me');
+   msg.disabled = false;
+   user = data.username;
+   send.onclick = function(){
+       console.log("hello");
+       sendMess(user);
+   };
+ });
+
+ 
+socket.on('newmsg', function(data) {
+console.log("Hello");
+if(data.message) {
+document.getElementById('message-container').innerHTML += '<div><b>' + 
+data.user + '</b>: ' + data.message + '</div>'
+    }
+ });
+
+
+function disableElements(functionName){
+    if(functionName === "register"){
+        document.getElementById('userName').disabled = true;
+        document.getElementById('register').disabled = true;
+        document.getElementById('joinRoom').disabled = false;
+        document.getElementById('roomName').disabled = false;
+    
+    }
+    if(functionName === "joinRoom"){
+        document.getElementById('roomName').disabled = true;
+        document.getElementById('joinRoom').disabled = true;
+        document.getElementById('leaveRoom').disabled = false;
+    }
+    if(functionName === "leaveRoom"){
+        document.getElementById('leaveRoom').disabled = true;
+        document.getElementById('roomName').disabled = false;
+        document.getElementById('joinRoom').disabled = false;
+    }
+    if(functionName === "call"){
+        document.getElementById('roomName').disabled = true;
+        document.getElementById('joinRoom').disabled = true;
+        document.getElementById('leaveRoom').disabled = false;
+    }
+}
+
+var socket = io.connect();
+var localVideoCurrentId;
+var localVideo;
+var sessionId;
+var videoCount=0;
+var participants = {};
+var video;
+
+window.onbeforeunload = function () {
+    socket.disconnect();
+};
+
+socket.on("id", function (id) {
+    console.log("receive id : " + id);
+    sessionId = id;
+});
+
+// message handler
+socket.on("message", function (message) {
+    switch (message.id) {
+        case "registered":
+            disableElements("register");
+            console.log(message.data);
+            break;
+        case "incomingCall":
+            incomingCall(message);
+            break;
+        case "callResponse":
+            console.log(message);
+            console.log(message.message);
+            break;
+        case "existingParticipants":
+            console.log("existingParticipants : " + message.data);
+            onExistingParticipants(message);
+            break;
+        case "newParticipantArrived":
+            console.log("newParticipantArrived : " + message.new_user_id);
+            onNewParticipant(message);
+            break;
+        case "participantLeft":
+            console.log("participantLeft : " + message.sessionId);
+            onParticipantLeft(message);
+            break;
+        case "receiveVideoAnswer":
+            console.log("receiveVideoAnswer from : " + message.sessionId);
+            onReceiveVideoAnswer(message);
+            break;
+        case "iceCandidate":
+            console.log("iceCandidate from : " + message.sessionId);
+            var participant = participants[message.sessionId];
+            if (participant != null) {
+                console.log(message.candidate);
+                participant.rtcPeer.addIceCandidate(message.candidate, function (error) {
+                    if (error) {
+                        if (message.sessionId === sessionId) {
+                            console.error("Error adding candidate to self : " + error);
+                        } else {
+                            console.error("Error adding candidate : " + error);
+                        }
+                    }
+                });
+            } else {
+                console.error('still does not establish rtc peer for : ' + message.sessionId);
+            }
+            break;
+        default:
+            console.error("Unrecognized message: ", message);
+    }
+});
+
+/**
+ * Send message to server
+ * @param data
+ */
+function sendMessage(data) {
+    socket.emit("message", data);
+}
+
+/**
+ * Register to server
+ */
+function register() {
+    var data = {
+        id: "register",
+        name: document.getElementById('userName').value
+    };
+    sendMessage(data);
+}
+
+/**
+ * Check if roomName exists, use DOM roomName otherwise, then join room
+ * @param roomName
+ */
+function joinRoom(roomName) {
+    disableElements('joinRoom');
+
+    // Check if roomName was given or if it's joining via roomName input field
+    if(typeof roomName == 'undefined'){
+        roomName = document.getElementById('roomName').value;
+    }
+    document.getElementById('roomName').value = roomName;
+
+    var data = {
+        id: "joinRoom",
+        roomName: roomName
+    };
+    sendMessage(data);
+}
+
+/**
+ * Invite other user to a conference call
+ */
+function call() {
+    // Not currently in a room
+    disableElements("call");
+    var message = {
+        id : 'call',
+        from : document.getElementById('userName').value,
+        to : document.getElementById('otherUserName').value
+    };
+    sendMessage(message);
+}
+
+/**
+ * Tell room you're leaving and remove all video elements
+ */
+function leaveRoom(){
+
+    disableElements("leaveRoom");
+    var message = {
+        id: "leaveRoom"
+    };
+
+    participants[sessionId].rtcPeer.dispose();
+    sendMessage(message);
+    participants = {};
+
+    var myNode = document.getElementById("video_list");
+    while (myNode.firstChild) {
+        myNode.removeChild(myNode.firstChild);
+    }
+}
+
+/**
+ * Javascript Confirm to see if user accepts invite
+ * @param message
+ */
+function incomingCall(message) {
+    var joinRoomMessage = message;
+    if (confirm('User ' + message.from
+            + ' is calling you. Do you accept the call?')) {
+        if(Object.keys(participants).length > 0){
+            leaveRoom();
+        }
+        console.log('message');
+        console.log(message);
+        joinRoom(joinRoomMessage.roomName);
+    } else {
+        var response = {
+            id : 'incomingCallResponse',
+            from : message.from,
+            callResponse : 'reject',
+            message : 'user declined'
+        };
+        sendMessage(response);
+    }
+}
+
+/**
+ * Request video from all existing participants
+ * @param message
+ */
+function onExistingParticipants(message) {
+
+    
+
+    var constraints = {
+        audio: true,
+        video: {
+            mandatory: {
+                maxWidth: 160,
+                maxHeight: 160,
+                maxFrameRate: 15,
+                minFrameRate: 15
+            }
+        }
+    };
+    console.log(sessionId + " register in room " + message.roomName);
+
+    // create video for current user to send to server
+    var localParticipant = new Participant(sessionId);
+    participants[sessionId] = localParticipant;
+    localVideo = document.getElementById("local_video");
+    var video = localVideo;
+
+    // bind function so that calling 'this' in that function will receive the current instance
+    var options = {
+        localVideo: video,
+        mediaConstraints: constraints,
+        onicecandidate: localParticipant.onIceCandidate.bind(localParticipant)
+    };
+
+
+    localParticipant.rtcPeer = new kurentoUtils.WebRtcPeer.WebRtcPeerSendonly(options, function (error) {
+        if (error) {
+            return console.error(error);
+        }
+
+        // Set localVideo to new object if on IE/Safari
+        localVideo = document.getElementById("local_video");
+
+        // initial main video to local first
+        localVideoCurrentId = sessionId;
+        localVideo.src = localParticipant.rtcPeer.localVideo.src;
+        localVideo.muted = true;
+
+        // Internet Explorer fix to fix audio :( has to be done after attachMediaStream is finished
+        //participants[sessionId].rtcPeer.getLocalStream().getAudioTracks()[0].enabled = true;
+
+        console.log("local participant id : " + sessionId);
+        this.generateOffer(localParticipant.offerToReceiveVideo.bind(localParticipant));
+    });
+
+    // get access to video from all the participants
+    console.log(message.data);
+    for (var i in message.data) {
+        receiveVideoFrom(message.data[i],message.name[i]);
+    }
+    for (var j in message.name){
+        console.log(message.name[j])
+    }
+}
+
+/**
+ * Add new participant locally and request video from new participant
+ * @param sender
+ */
+function receiveVideoFrom(sender,sender_name) {
+    console.log(sessionId + " receive video from " + sender);
+    var participant = new Participant(sender);
+    participants[sender] = participant;
+    participant.name=sender_name;
+    
+    console.log(participant);
+    var video = createVideoForParticipant(participant);
+
+    // bind function so that calling 'this' in that function will receive the current instance
+    var options = {
+        remoteVideo: video,
+        onicecandidate: participant.onIceCandidate.bind(participant)
+    };
+
+    var videoBtn = document.getElementById('video');
+    var audioBtn = document.getElementById('audio');
+    var Flag = true;
+    var audioFlag = true;
+
+
+    
+     videoBtn.onclick = function(){
+         if (Flag == false){
+            participants[sessionId].rtcPeer.videoEnabled = true;
+            Flag = true;
+         }
+         else{
+            participants[sessionId].rtcPeer.videoEnabled = false;
+            Flag = false;
+         }
+        }
+
+     audioBtn.onclick = function(){
+         if (audioFlag == false){
+            participants[sessionId].rtcPeer.audioEnabled = true;
+            audioFlag = true;
+         }
+         else{
+            participants[sessionId].rtcPeer.audioEnabled = false;
+            audioFlag = false;
+         }
+    }
+
+
+
+
+
+    participant.rtcPeer = new kurentoUtils.WebRtcPeer.WebRtcPeerRecvonly(options, function (error) {
+        if (error) {
+            return console.error(error);
+        }
+        this.generateOffer(participant.offerToReceiveVideo.bind(participant));
+    });
+}
+
+/**
+ * Receive video from new participant
+ * @param message
+ */
+function onNewParticipant(message) {
+    receiveVideoFrom(message.new_user_id,message.name)
+
+    
+    console.log(message.name);
+    
+}
+
+/**
+ * Destroy videostream/DOM element on participant leaving room
+ * @param message
+ */
+function onParticipantLeft(message) {
+    var participant = participants[message.sessionId];
+    participant.dispose();
+    delete participants[message.sessionId];
+
+    console.log("video-" + participant.id);
+    // remove video tag
+    //document.getElementById("video-" + participant.id).remove();
+    var div = document.getElementById("div-"+ participant.id);
+    // Internet Explorer doesn't know element.remove(), does know this
+    
+    div.parentNode.removeChild(div);
+}
+
+/**
+ * Required WebRTC method
+ * @param message
+ */
+function onReceiveVideoAnswer(message) {
+    var participant = participants[message.sessionId];
+    participant.rtcPeer.processAnswer(message.sdpAnswer, function (error) {
+        if (error) {
+            console.error(error);
+        } else {
+            participant.isAnswer = true;
+            while (participant.iceCandidateQueue.length) {
+                console.error("collected : " + participant.id + " ice candidate");
+                var candidate = participant.iceCandidateQueue.shift();
+                participant.rtcPeer.addIceCandidate(candidate);
+            }
+        }
+    });
+}
+
+/**
+ * Create video DOM element
+ * @param participant
+ * @returns {Element}
+ */
+function createVideoForParticipant(participant) {
+
+    var videoId = "video-" + participant.id;
+    
+    div =document.createElement('div');
+    video = document.createElement('video');
+    vname = document.createElement('a');
+    pin = document.createElement('button');
+
+    div.id= "div-"+ participant.id;
+    video.name = participant.name;
+    // video.className = "video"
+    video.autoplay = true;
+    video.id = videoId;
+    div.className="class5"
+    video.poster = "img/user.jpg";
+    // vname.className="name";
+    vname.innerHTML=participant.name;
+    pin.onclick="enlarge(this.id)"
+    div.appendChild(video);
+    div.appendChild(vname);
+    // div.appendChild(pin);
+
+    document.getElementById("video_list").appendChild(div);
+
+
+    
+      
+    
+    // return video element
+    return document.getElementById(videoId);
+}
+
+setInterval(function(){
+    var elements = document.getElementsByClassName('class5');
+    videoCount=elements.length;
+
+    for (var i in elements) {
+        if(videoCount==1){
+            elements[i].style="width:95%; height: 95%; float: left;";
+        }
+        else if(videoCount==2){
+            elements[i].style="width:47%; height: 47%; float: left;";
+        }
+        else if(videoCount>2 && videoCount<5){
+            elements[i].style="width:49%; height: 49%; float: left;";
+        }
+        else{
+            elements[i].style="width:25%; height: 150px; float: left;";
+        }
+        }
+}, 5000);
+
+
+var pinflag =false
+function enlarge(id){
+    var enlarge = document.getElementById(id);
+     enlarge.onclick = function(){
+         if (Flag == false){
+            enlarge.style="width:95%; height: 95%; float: left;";
+            Flag = true;
+         }
+         else{
+            enlarge.style="width:25%; height: 150px; float: left;";
+            Flag = false;
+         }
+        }
+
+}
+function sendMess(user) {
+    var msg = document.getElementById('me').value;
+    if(msg) {
+       //  console.log('msg'+msg);
+       socket.emit('msg', {message: msg, user: user});
+    }
+ }
+
+socket.on('userSet', function(data) {
+   var send = document.getElementById('send');
+   var msg = document.getElementById('me');
+   msg.disabled = false;
+   user = data.username;
+   send.onclick = function(){
+       console.log("hello");
+       sendMess(user);
+   };
+ });
+
+ 
+socket.on('newmsg', function(data) {
+console.log("Hello");
+if(data.message) {
+document.getElementById('message-container').innerHTML += '<div><b>' + 
+data.user + '</b>: ' + data.message + '</div>'
+    }
+ });
+
+
+function disableElements(functionName){
+    if(functionName === "register"){
+        document.getElementById('userName').disabled = true;
+        document.getElementById('register').disabled = true;
+        document.getElementById('joinRoom').disabled = false;
+        document.getElementById('roomName').disabled = false;
+    
+    }
+    if(functionName === "joinRoom"){
+        document.getElementById('roomName').disabled = true;
+        document.getElementById('joinRoom').disabled = true;
+        document.getElementById('leaveRoom').disabled = false;
+    }
+    if(functionName === "leaveRoom"){
+        document.getElementById('leaveRoom').disabled = true;
+        document.getElementById('roomName').disabled = false;
+        document.getElementById('joinRoom').disabled = false;
+    }
+    if(functionName === "call"){
+        document.getElementById('roomName').disabled = true;
+        document.getElementById('joinRoom').disabled = true;
+        document.getElementById('leaveRoom').disabled = false;
+    }
+}
+
+
+##########
+index.HTML
+##########
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1" />
+
+    
+    <script src="lib/adapterjs/publish/adapter.debug.js"></script>
+    <script src="http://code.jquery.com/jquery-1.11.2.min.js"></script>
+
+
+    <!-- Use our version for IE/Safari, Their version for other browsers -->
+    <script src="bower_components/kurento-utils/dist/kurento-utils.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+
+    <script src="js/index.js"></script>
+    <script src="js/participants.js"></script>
+    <title>vchat</title> 
+    
+    <script>
+      
+      var video=true;
+      function myFunction() {
+        if(video==true){
+        document.getElementById('video').innerHTML='<svg xmlns="http://www.w3.org/2000/svg" x="0px" y="0px" width="60" height="60" viewBox="0 0 172 172" style=" fill:#000000;"><g transform=""><g fill="none" fill-rule="nonzero" stroke="none" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="10" stroke-dasharray="" stroke-dashoffset="0" font-family="none" font-weight="none" font-size="none" text-anchor="none" style="mix-blend-mode: normal"><path d="M0,172v-172h172v172z" fill="none"></path><path d="M86,169.42c-46.07159,0 -83.42,-37.34841 -83.42,-83.42v0c0,-46.07159 37.34841,-83.42 83.42,-83.42v0c46.07159,0 83.42,37.34841 83.42,83.42v0c0,46.07159 -37.34841,83.42 -83.42,83.42z" fill="#e74c3c"></path><path d="" fill="none"></path><g fill="#ffffff"><path d="M48.79235,42.44794l-6.3444,6.3444l5.8011,5.8011h-2.6289c-4.94878,0 -8.9733,4.02453 -8.9733,8.9733v44.86651c0,4.94878 4.02453,8.9733 8.9733,8.9733h58.32646c2.00109,0 3.83403,-0.67655 5.3279,-1.78765l13.93315,13.93315l6.3444,-6.3444zM73.89831,54.59345l47.60932,47.60932l13.84553,11.07642v-54.55837l-22.43325,17.9466v-13.10067c0,-4.94878 -4.02453,-8.9733 -8.9733,-8.9733z"></path></g></g></g></svg>';
+          video=false;
+      }else if(video==false){
+        document.getElementById('video').innerHTML='<svg xmlns="http://www.w3.org/2000/svg" x="0px" y="0px" width="60" height="60" viewBox="0 0 172 172" style=" fill:rgb(43, 39, 39);"><g transform=""><g fill="none" fill-rule="nonzero" stroke="none" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="10" stroke-dasharray="" stroke-dashoffset="0" font-family="none" font-weight="none" font-size="none" text-anchor="none" style="mix-blend-mode: normal"><path d="M0,172v-172h172v172z" fill="none"></path><path d="M86,169.42c-46.07159,0 -83.42,-37.34841 -83.42,-83.42v0c0,-46.07159 37.34841,-83.42 83.42,-83.42v0c46.07159,0 83.42,37.34841 83.42,83.42v0c0,46.07159 -37.34841,83.42 -83.42,83.42z" fill="#000000"></path><g fill="#ffffff"><path d="M52.675,59.34c-4.6668,0 -8.33125,3.66445 -8.33125,8.33125v36.6575c0,4.6668 3.66445,8.33125 8.33125,8.33125h44.98875c4.6668,0 8.33125,-3.66445 8.33125,-8.33125v-36.6575c0,-4.6668 -3.66445,-8.33125 -8.33125,-8.33125zM127.65625,64.85945l-18.32875,9.78922v22.70266l18.32875,9.78922z"></path></g><path d="" fill="none"></path></g></g></svg>';
+      }
+      }
+    </script>
+
+<link rel="stylesheet" href="css/kurento.css">
+</head> 
+<body> 
+
+<header>
+<h1>Video conferencing web app for meetings & trainings</h1>
+</header> 
+
+<div id="video_list" class="leftpane">
+  <div id="screenshare" style="display: none; height:0; width: 0; float: left;">
+    <img id="screen_img" class="class5" style="width:49%; height: 65%; float: left;top:10%; display: block; max-width: 100%;"></img>
+  </div>
+</div>
+
+
+<div class="rightpane">
+  <div  id="container" style="width: 100%; height: 35%">
+    <center>
+    <a id="name"></a>
+    <video id="local_video" autoplay style="width: 250px; height:200px;" poster="img/webrtc.png"></video>
+    </center>
+  </div>
+  <!-- <h3 style="margin:0px">Chat</h3>
+  <div style="overflow-y:scroll ; width: 95%; height: 55%;border: 2px solid black; margin: 2px 2px;"> -->
+    <!-- <div id="message-container" style="text-align: left"></div> -->
+        <img id="local_screen_img" style="width: 150px;height:150px;float:left,">
+
+    <div class="socketchatbox-page" disabled="disabled">
+    
+      <div id='socketchatbox-top'>
+        <div id='socketchatbox-username'></div>
+        <div id='socketchatbox-showHideChatbox'>↓</div>
+      </div>
+      <div id='socketchatbox-body'>
+        <div class="socketchatbox-chatArea">
+          <ul class="socketchatbox-messages"></ul>
+        </div>
+    
+        <form id="socketchatbox-sendMedia">
+          <div>
+            <label class="socketchatbox-filebutton">
+              Drop file above to send
+              <input type="file" id="socketchatbox-imagefile" accept="image/*">
+            </label>
+          </div>
+        </form>
+    
+        <input class="socketchatbox-inputMessage" placeholder="Type here..." />
+      </div>
+    
+    </div>
+    </div>
+  </div>
+  
+    <!-- <div id = "Chat" >
+    <input type="text" id="me" disabled = "disabled" size="40">
+    <button id="send">Send</button>
+      <img id="local_screen_img" style="width: 400px;height:400px;float:left,">
+
+    </div> -->
+    
+</div>
+
+
+
+
+
+<div class="bottom" >
+  <div style="float: left;">
+    <input type="text" name="userName" value="" id="userName" placeholder="Username" limit="10"/>
+    <button id="register" onClick="register()">Register</button> <br />
+    <input type="text" disabled="disabled" name="room" value="" id="roomName" placeholder="Room">
+    <button id="joinRoom" disabled="disabled" onClick="joinRoom()">Join Room</button>
+  </div>   
+    <button id="audio"class=button><svg xmlns="http://www.w3.org/2000/svg" x="0px" y="0px"
+      width="60" height="60"
+      viewBox="0 0 172 172"
+      style=" fill:rgb(43, 39, 39);"><g transform=""><g fill="none" fill-rule="nonzero" stroke="none" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="10" stroke-dasharray="" stroke-dashoffset="0" font-family="none" font-weight="none" font-size="none" text-anchor="none" style="mix-blend-mode: normal"><path d="M0,172v-172h172v172z" fill="none"></path><path d="M86,169.42c-46.07159,0 -83.42,-37.34841 -83.42,-83.42v0c0,-46.07159 37.34841,-83.42 83.42,-83.42v0c46.07159,0 83.42,37.34841 83.42,83.42v0c0,46.07159 -37.34841,83.42 -83.42,83.42z" fill="#0e0000"></path><g fill="#ffffff"><path d="M86,36.12c-8.07511,0 -14.62,6.54489 -14.62,14.62v29.24c0,8.07511 6.54489,14.62 14.62,14.62c8.07511,0 14.62,-6.54489 14.62,-14.62v-29.24c0,-8.07511 -6.54489,-14.62 -14.62,-14.62zM51.88667,79.98c0,17.17994 12.7163,31.35125 29.24,33.72309v15.01025h9.74667v-15.01025c16.5237,-2.37183 29.24,-16.54314 29.24,-33.72309h-9.74667c0,13.45527 -10.91139,24.36667 -24.36667,24.36667c-13.45527,0 -24.36667,-10.91139 -24.36667,-24.36667z"></path></g><path d="" fill="none"></path></g></g></svg></button>
+    <button id="leaveRoom" disabled="disabled" onClick="leaveRoom()" class=button><svg xmlns="http://www.w3.org/2000/svg" x="0px" y="0px"
+      width="60" height="60"
+      viewBox="0 0 172 172"
+      style=" fill:rgb(43, 39, 39);"><g fill="none" fill-rule="nonzero" stroke="none" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="10" stroke-dasharray="" stroke-dashoffset="0" font-family="none" font-weight="none" font-size="none" text-anchor="none" style="mix-blend-mode: normal"><path d="M0,172v-172h172v172z" fill="none"></path><path d="M86,169.42c-46.07159,0 -83.42,-37.34841 -83.42,-83.42v0c0,-46.07159 37.34841,-83.42 83.42,-83.42h0c46.07159,0 83.42,37.34841 83.42,83.42v0c0,46.07159 -37.34841,83.42 -83.42,83.42z" fill="#e74c3c"></path><g fill="#ffffff"><path d="M134.98259,100.10799c-0.55052,0.57254 -0.55052,0.57254 -1.12307,0.57254c-0.57254,0 -2.81867,0 -3.94174,-1.12307c-1.12306,-0.57254 -2.81867,-2.26814 -4.51428,-3.39121c-1.6956,-1.12307 -7.33295,-5.0648 -10.70214,-6.76041c-3.39122,-1.6956 -5.08682,-2.24613 -5.63734,-5.0648c-0.57255,-2.81867 -0.57255,-16.3615 -0.57255,-16.3615c0,0 -5.63734,-1.12307 -10.15162,-1.6956c-4.51428,-0.55053 -10.70214,-1.12307 -17.46254,-0.55053c-6.78243,0.55053 -12.97029,1.12307 -19.18017,3.3692c0,7.90548 0,14.66589 0,16.3615c0,1.69561 0,2.24613 -2.24613,3.3692c-2.26814,1.14508 -6.20988,2.81867 -9.02855,5.08681c-2.81867,2.24613 -6.18786,4.51428 -7.88347,6.18787c-2.26814,1.14508 -2.26814,0.57254 -3.39121,0.57254c-1.12307,0 -2.81867,-0.57254 -3.36919,-1.12307c-0.57255,0 -1.14508,-1.12306 -5.08682,-5.08681c-3.36919,-3.3692 -8.45601,-8.45601 -9.57908,-9.57908c-1.12307,-1.12307 -1.12307,-1.12307 -1.6956,-2.24613l-1.12307,-2.26814c0,-0.55053 0.57255,-2.81867 1.6956,-3.94174c1.12307,-1.12307 5.0648,-4.51428 7.88347,-6.76041c2.81867,-2.24613 11.27468,-7.33295 14.66589,-9.02855c3.3692,-1.67359 14.64388,-7.31093 31.00537,-9.57908c16.91202,-2.24613 33.2515,0.57254 44.52618,3.94174c11.27468,3.96376 21.99884,10.72416 27.06364,14.09335c5.0648,3.39121 6.76041,5.08681 7.33295,6.78243c1.12307,1.67359 0.55053,3.36919 0.55053,4.49226c-0.55053,1.14508 -1.12307,2.26814 -2.24613,3.39121c-1.12307,1.12307 -3.94174,3.94174 -7.88347,7.88347c-3.39122,3.96376 -7.90549,8.45601 -7.90549,8.45601z"></path></g></g></svg></button>
+    <button id="video"class=button onclick="myFunction()"><svg xmlns="http://www.w3.org/2000/svg" x="0px" y="0px"
+      width="60" height="60"
+      viewBox="0 0 172 172"
+      style=" fill:rgb(43, 39, 39);"><g transform=""><g fill="none" fill-rule="nonzero" stroke="none" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="10" stroke-dasharray="" stroke-dashoffset="0" font-family="none" font-weight="none" font-size="none" text-anchor="none" style="mix-blend-mode: normal"><path d="M0,172v-172h172v172z" fill="none"></path><path d="M86,169.42c-46.07159,0 -83.42,-37.34841 -83.42,-83.42v0c0,-46.07159 37.34841,-83.42 83.42,-83.42v0c46.07159,0 83.42,37.34841 83.42,83.42v0c0,46.07159 -37.34841,83.42 -83.42,83.42z" fill="#000000"></path><g fill="#ffffff"><path d="M52.675,59.34c-4.6668,0 -8.33125,3.66445 -8.33125,8.33125v36.6575c0,4.6668 3.66445,8.33125 8.33125,8.33125h44.98875c4.6668,0 8.33125,-3.66445 8.33125,-8.33125v-36.6575c0,-4.6668 -3.66445,-8.33125 -8.33125,-8.33125zM127.65625,64.85945l-18.32875,9.78922v22.70266l18.32875,9.78922z"></path></g><path d="" fill="none"></path></g></g></svg></button>
+      <button id='share'>Share Screen</button>
+ </div>
+
+
+<canvas style="display:none;" id="preview"></canvas>
+<div id="logger"></div>
+      
+</body> 
+</html>
+
+
+
+<!--
+  <svg xmlns="http://www.w3.org/2000/svg" x="0px" y="0px"
+width="60" height="60"
+viewBox="0 0 172 172"
+style=" fill:#000000;"><g transform=""><g fill="none" fill-rule="nonzero" stroke="none" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="10" stroke-dasharray="" stroke-dashoffset="0" font-family="none" font-weight="none" font-size="none" text-anchor="none" style="mix-blend-mode: normal"><path d="M0,172v-172h172v172z" fill="none"></path><path d="M86,169.42c-46.07159,0 -83.42,-37.34841 -83.42,-83.42v0c0,-46.07159 37.34841,-83.42 83.42,-83.42v0c46.07159,0 83.42,37.34841 83.42,83.42v0c0,46.07159 -37.34841,83.42 -83.42,83.42z" fill="#e74c3c"></path><path d="" fill="none"></path><g fill="#ffffff"><path d="M48.79235,42.44794l-6.3444,6.3444l5.8011,5.8011h-2.6289c-4.94878,0 -8.9733,4.02453 -8.9733,8.9733v44.86651c0,4.94878 4.02453,8.9733 8.9733,8.9733h58.32646c2.00109,0 3.83403,-0.67655 5.3279,-1.78765l13.93315,13.93315l6.3444,-6.3444zM73.89831,54.59345l47.60932,47.60932l13.84553,11.07642v-54.55837l-22.43325,17.9466v-13.10067c0,-4.94878 -4.02453,-8.9733 -8.9733,-8.9733z"></path></g></g></g></svg>;
+  
+  
+  <svg xmlns="http://www.w3.org/2000/svg" x="0px" y="0px"
+width="100" height="100"
+viewBox="0 0 172 172"
+style=" fill:#000000;"><g fill="none" fill-rule="nonzero" stroke="none" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="10" stroke-dasharray="" stroke-dashoffset="0" font-family="none" font-weight="none" font-size="none" text-anchor="none" style="mix-blend-mode: normal"><path d="M0,172v-172h172v172z" fill="none"></path><path d="M86,169.42c-46.07159,0 -83.42,-37.34841 -83.42,-83.42v0c0,-46.07159 37.34841,-83.42 83.42,-83.42h0c46.07159,0 83.42,37.34841 83.42,83.42v0c0,46.07159 -37.34841,83.42 -83.42,83.42z" fill="#e74c3c"></path><g fill="#ffffff"><path d="M86,37.26667c-7.80495,0 -14.12505,6.39625 -14.62,13.70625l29.24,29.24v-28.32625c0,-8.28086 -6.33914,-14.62 -14.62,-14.62zM44.27208,37.41896l-6.85313,6.85312l33.96104,33.96104v7.76687c0,8.28086 6.33914,14.62 14.62,14.62c2.26534,0 4.35935,-0.60917 6.24396,-1.52292l7.00542,7.00542c-3.82633,2.58896 -8.31893,4.26417 -13.24938,4.26417c-13.64914,0 -24.36667,-10.71753 -24.36667,-24.36667h-9.74667c0,17.05667 12.67828,31.21979 29.24,33.65646v15.07688h9.74667v-15.07687c5.78708,-0.91375 10.965,-3.17909 15.38146,-6.39625l21.47313,21.32083l6.85313,-6.85313l-35.48396,-35.33167l-27.71708,-27.86938zM110.36667,86c0,1.46581 0.03808,2.37956 -0.45687,3.35042l8.22375,8.37604c1.46581,-3.40753 1.97979,-7.34807 1.97979,-11.72646z"></path></g></g></svg> -->
+
+
